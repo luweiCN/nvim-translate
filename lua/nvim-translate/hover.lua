@@ -10,6 +10,7 @@ local state = {
   anchor = nil,
   augroup = nil,
   on_close = nil,
+  source_keymaps = {},
   focusing = false,
 }
 local closing = false
@@ -41,6 +42,70 @@ local function contains(anchor, position)
   return true
 end
 
+local function normalized_lhs(lhs)
+  if lhs:match("^<.*>$") then
+    return lhs:upper()
+  end
+  return lhs
+end
+
+local function buffer_mapping(buf, lhs)
+  local target = normalized_lhs(lhs)
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if normalized_lhs(mapping.lhs) == target then
+      return mapping
+    end
+  end
+  return nil
+end
+
+local function restore_source_keymaps()
+  local buf = state.source_buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    state.source_keymaps = {}
+    return
+  end
+
+  for _, entry in ipairs(state.source_keymaps) do
+    local current = buffer_mapping(buf, entry.lhs)
+    if current and current.callback == entry.callback then
+      pcall(vim.keymap.del, "n", entry.lhs, { buffer = buf })
+      if entry.previous then
+        local previous = entry.previous
+        pcall(vim.api.nvim_buf_set_keymap, buf, "n", previous.lhs, previous.rhs or "", {
+          callback = previous.callback,
+          desc = previous.desc,
+          expr = previous.expr == 1,
+          noremap = previous.noremap == 1,
+          nowait = previous.nowait == 1,
+          silent = previous.silent == 1,
+        })
+      end
+    end
+  end
+  state.source_keymaps = {}
+end
+
+local function install_source_keymap(lhs, direction)
+  if lhs == false then
+    return
+  end
+  local callback = function()
+    M.scroll(direction)
+  end
+  state.source_keymaps[#state.source_keymaps + 1] = {
+    lhs = lhs,
+    callback = callback,
+    previous = buffer_mapping(state.source_buf, lhs),
+  }
+  vim.keymap.set("n", lhs, callback, {
+    buffer = state.source_buf,
+    desc = direction < 0 and "Scroll translation result up" or "Scroll translation result down",
+    nowait = true,
+    silent = true,
+  })
+end
+
 local function close(notify)
   if closing then
     return
@@ -52,6 +117,7 @@ local function close(notify)
   if state.augroup then
     pcall(vim.api.nvim_del_augroup_by_id, state.augroup)
   end
+  restore_source_keymaps()
 
   state.win = nil
   state.buf = nil
@@ -60,6 +126,7 @@ local function close(notify)
   state.anchor = nil
   state.augroup = nil
   state.on_close = nil
+  state.source_keymaps = {}
   state.focusing = false
 
   if win and vim.api.nvim_win_is_valid(win) then
@@ -130,6 +197,8 @@ function M.show(lines, opts)
   state.anchor = opts.anchor
   state.on_close = opts.on_close
   state.augroup = vim.api.nvim_create_augroup("NvimTranslateHover", { clear = true })
+  install_source_keymap(cfg.scroll_up_key, -1)
+  install_source_keymap(cfg.scroll_down_key, 1)
 
   vim.keymap.set("n", "<Esc>", function()
     close(true)
@@ -183,11 +252,23 @@ end
 
 function M.focus()
   if not M.is_open() then
-    return
+    return false
   end
   state.focusing = true
   vim.api.nvim_set_current_win(state.win)
   state.focusing = false
+  return true
+end
+
+function M.scroll(direction)
+  if not M.is_open() then
+    return false
+  end
+  local key = vim.api.nvim_replace_termcodes(direction < 0 and "<C-u>" or "<C-d>", true, false, true)
+  vim.api.nvim_win_call(state.win, function()
+    vim.cmd.normal({ args = { key }, bang = true })
+  end)
+  return true
 end
 
 function M.close(notify)

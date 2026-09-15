@@ -24,18 +24,31 @@ test("Qwen defaults are internally consistent", function()
   equal(160, opts.stream_update_interval)
   equal(84, opts.width)
   equal(28, opts.height)
-  equal(" 再按 <leader>ut 进入 ", opts.footer)
+  equal("", opts.footer)
+  equal("<C-u>", opts.scroll_up_key)
+  equal("<C-d>", opts.scroll_down_key)
   equal(" 翻译／词典 ", opts.title)
-  assert(opts.prompt:find("## 发音与词形", 1, true))
+  assert(opts.prompt:find("## noun · 名词 [C 可数]", 1, true))
+  assert(opts.prompt:find("**搭配**", 1, true))
+  assert(opts.prompt:find("high-frequency modern senses", 1, true))
   assert(opts.prompt:find("## 译文", 1, true))
-  assert(opts.prompt:find("**原形**", 1, true))
-  assert(opts.prompt:find("grammatically", 1, true))
+  assert(opts.prompt:find("**词头**", 1, true))
+  assert(opts.prompt:find("normal dictionary convention", 1, true))
   equal(false, opts.trigger_key)
 end)
 
 test("provider-specific body can be cleared", function()
   local config = require("nvim-translate.config")
   equal({}, config.setup({ extra_body = {} }).extra_body)
+end)
+
+test("source scrolling can be disabled but its keys cannot collide", function()
+  local config = require("nvim-translate.config")
+  local opts = config.setup({ scroll_up_key = false, scroll_down_key = false })
+  equal(false, opts.scroll_up_key)
+  equal(false, opts.scroll_down_key)
+  local ok = pcall(config.setup, { scroll_up_key = "gk", scroll_down_key = "gk" })
+  equal(false, ok)
 end)
 
 test("cache evicts the least recently used entry", function()
@@ -144,14 +157,22 @@ end)
 
 test("hover can be updated, focused, and closed once", function()
   local config = require("nvim-translate.config")
-  config.setup()
+  config.setup({ width = 40, height = 5 })
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { "hello world" })
 
   local source_win = vim.api.nvim_get_current_win()
   local source_buf = vim.api.nvim_get_current_buf()
   local closes = 0
+  local restored_scrolls = 0
+  vim.keymap.set("n", "<C-u>", function()
+    restored_scrolls = restored_scrolls + 1
+  end, { buffer = source_buf })
   local hover = require("nvim-translate.hover")
-  local buf, win = hover.show({ "你好" }, {
+  local content = {}
+  for index = 1, 30 do
+    content[index] = "line " .. index
+  end
+  local buf, win = hover.show(content, {
     source_win = source_win,
     source_buf = source_buf,
     anchor = { start_row = 1, end_row = 1, start_col = 0, end_col = 4 },
@@ -172,31 +193,50 @@ test("hover can be updated, focused, and closed once", function()
     end,
   })
   local updated_line = "你好，世界：" .. string.rep("x", 30)
-  hover.update({ updated_line })
+  content[1] = updated_line
+  hover.update(content)
   equal(updated_line, vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1])
   equal(1, text_changes)
   equal(initial_width, vim.api.nvim_win_get_width(win))
   equal(initial_height, vim.api.nvim_win_get_height(win))
-  assert(vim.inspect(vim.api.nvim_win_get_config(win).footer):find("<leader>ut", 1, true))
-  hover.focus()
+  assert(not vim.inspect(vim.api.nvim_win_get_config(win).footer):find("<leader>ut", 1, true))
+
+  local source_scroll_down = vim.fn.maparg("<C-d>", "n", false, true)
+  local source_scroll_up = vim.fn.maparg("<C-u>", "n", false, true)
+  equal(1, source_scroll_down.buffer)
+  equal(1, source_scroll_up.buffer)
+  local top_before = vim.api.nvim_win_call(win, vim.fn.winsaveview).topline
+  source_scroll_down.callback()
+  local top_after = vim.api.nvim_win_call(win, vim.fn.winsaveview).topline
+  assert(top_after > top_before)
+  equal(source_win, vim.api.nvim_get_current_win())
+
+  equal(true, require("nvim-translate").focus())
   equal(win, vim.api.nvim_get_current_win())
   equal("", vim.fn.maparg("<C-d>", "n"))
   equal("", vim.fn.maparg("<C-u>", "n"))
   hover.close()
   equal(false, hover.is_open())
+  equal(false, hover.focus())
   equal(1, closes)
+  equal("", vim.fn.maparg("<C-d>", "n"))
+  local restored_scroll_up = vim.fn.maparg("<C-u>", "n", false, true)
+  restored_scroll_up.callback()
+  equal(1, restored_scrolls)
+  vim.keymap.del("n", "<C-u>", { buffer = source_buf })
 end)
 
 test("streamed content appears with the source before completion", function()
   local callbacks = {}
   local chunk_callbacks = {}
+  local requests = {}
   local displays = {}
   local open = false
   local on_close
-  local focuses = 0
 
   package.loaded["nvim-translate.llm"] = {
-    chat = function(_, callback, on_chunk)
+    chat = function(request, callback, on_chunk)
+      requests[#requests + 1] = request
       callbacks[#callbacks + 1] = callback
       chunk_callbacks[#chunk_callbacks + 1] = on_chunk
       return {
@@ -211,9 +251,7 @@ test("streamed content appears with the source before completion", function()
     is_open = function()
       return open
     end,
-    focus = function()
-      focuses = focuses + 1
-    end,
+    focus = function() end,
     show = function(value, opts)
       open = true
       on_close = opts.on_close
@@ -240,34 +278,33 @@ test("streamed content appears with the source before completion", function()
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { "alpha" })
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   translate.translate()
-  assert(displays[1]:find("[!ABSTRACT] 词条", 1, true))
-  assert(displays[1]:find("alpha", 1, true))
+  assert(displays[1]:find("# alpha", 1, true))
+  equal({ mode = "dictionary", text = "alpha" }, vim.json.decode(requests[1].messages[2].content))
   equal("function", type(chunk_callbacks[1]))
   translate.translate()
-  equal(1, focuses)
   equal(1, #callbacks)
 
   local initial_updates = #displays
   vim.wait(250)
   equal(initial_updates, #displays)
 
-  chunk_callbacks[1]("## 发音")
+  chunk_callbacks[1]("## noun")
   vim.wait(20)
   equal(initial_updates, #displays)
 
-  chunk_callbacks[1]("与词形\n- **原形**")
+  chunk_callbacks[1](" · 名词 [C 可数]\n**UK**")
   assert(vim.wait(100, function()
-    return displays[#displays]:find("## 发音与词形", 1, true) ~= nil
+    return displays[#displays]:find("## noun · 名词 [C 可数]", 1, true) ~= nil
   end))
-  assert(not displays[#displays]:find("**原形**", 1, true))
+  assert(not displays[#displays]:find("**UK**", 1, true))
   assert(displays[#displays]:find("alpha", 1, true))
 
-  chunk_callbacks[1](" `alpha`\n")
+  chunk_callbacks[1](" `/ˈæl.fə/`\n")
   assert(vim.wait(100, function()
-    return displays[#displays]:find("**原形** `alpha`", 1, true) ~= nil
+    return displays[#displays]:find("**UK** `/ˈæl.fə/`", 1, true) ~= nil
   end))
 
-  callbacks[1]("## 发音与词形\n- **原形** `alpha`\n完整结果", nil)
+  callbacks[1]("## noun · 名词 [C 可数]\n**UK** `/ˈæl.fə/`\n完整结果", nil)
   assert(vim.wait(100, function()
     return displays[#displays]:find("完整结果", 1, true) ~= nil
   end))
@@ -278,6 +315,7 @@ test("streamed content appears with the source before completion", function()
   translate.translate()
   assert(displays[#displays]:find("[!QUOTE] 原文", 1, true))
   assert(displays[#displays]:find("hello world", 1, true))
+  equal({ mode = "auto", text = "hello world" }, vim.json.decode(requests[2].messages[2].content))
   translate.cancel()
   vim.cmd("normal! \27")
 end)
@@ -334,7 +372,7 @@ test("a cached result invalidates an older pending response", function()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   translate.translate()
   callbacks[1]("B", nil)
-  local beta_display = "> [!ABSTRACT] 词条\n> **beta**\n\nB"
+  local beta_display = "# beta\n\nB"
   vim.wait(100, function()
     return displays[#displays] == beta_display
   end)

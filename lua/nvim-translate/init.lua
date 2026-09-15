@@ -42,6 +42,10 @@ function M.cancel()
   require("nvim-translate.translate").cancel()
 end
 
+function M.focus()
+  return require("nvim-translate.hover").focus()
+end
+
 function M.clear_cache()
   cache.clear()
   vim.notify("[nvim-translate] Cache cleared", vim.log.levels.INFO)

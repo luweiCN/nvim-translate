@@ -78,7 +78,7 @@ local function input()
   return word, word ~= "" and word_anchor(word) or nil, true
 end
 
-local function cache_key(opts, base_url, text)
+local function cache_key(opts, base_url, mode, text)
   local values = {
     base_url,
     opts.model,
@@ -86,6 +86,7 @@ local function cache_key(opts, base_url, text)
     tostring(opts.temperature),
     tostring(opts.max_tokens),
     vim.json.encode(opts.extra_body),
+    mode,
     text,
   }
   local encoded = {}
@@ -100,9 +101,12 @@ local function lines(value)
 end
 
 local function source_block(text, is_word)
-  local result = { is_word and "> [!ABSTRACT] 词条" or "> [!QUOTE] 原文" }
+  if is_word then
+    return "# " .. text
+  end
+  local result = { "> [!QUOTE] 原文" }
   for _, line in ipairs(lines(text)) do
-    result[#result + 1] = "> " .. (is_word and "**" .. line .. "**" or line)
+    result[#result + 1] = "> " .. line
   end
   return table.concat(result, "\n")
 end
@@ -122,7 +126,6 @@ end
 
 function M.translate()
   if hover.is_open() then
-    hover.focus()
     return
   end
 
@@ -137,7 +140,8 @@ function M.translate()
   local source_win = vim.api.nvim_get_current_win()
   local source_buf = vim.api.nvim_get_current_buf()
   local base_url = config.resolve_base_url()
-  local key = cache_key(opts, base_url, text)
+  local request_mode = is_word and "dictionary" or "auto"
+  local key = cache_key(opts, base_url, request_mode, text)
   local source = source_block(text, is_word)
   local hover_opts = {
     source_win = source_win,
@@ -196,7 +200,7 @@ function M.translate()
     model = opts.model,
     messages = {
       { role = "system", content = opts.prompt },
-      { role = "user", content = text },
+      { role = "user", content = vim.json.encode({ mode = request_mode, text = text }) },
     },
     temperature = opts.temperature,
     max_tokens = opts.max_tokens,

@@ -5,12 +5,17 @@ Cloud Model Studio's OpenAI-compatible API with Qwen3.7-Flash.
 
 ## Features
 
-- Look up the word under the cursor as a learner's dictionary entry.
+- Look up the word under the cursor as a compact learner's dictionary entry,
+  with inflection metadata, part-of-speech pronunciation, grammar labels, and
+  sense-local collocations and bilingual examples.
 - Translate a Visual selection and explain only its useful sentence patterns
   and vocabulary.
-- Repeat the exact word or source passage in a styled Markdown callout.
+- Repeat the exact word as a Markdown headword, or a source passage in a styled
+  callout.
 - Stream complete Markdown lines into a fixed-size, focusable floating window,
   with throttled redraws, cancellation, and stale-response protection.
+- Scroll the result with configurable source-buffer keys without entering the
+  floating window, while preserving and restoring existing buffer mappings.
 - Integrate automatically with render-markdown.nvim when it is configured for
   the `markdown` filetype.
 - Cache repeated translations in memory with an LRU cache.
@@ -82,10 +87,12 @@ plugin itself should own the mapping.
   timeout = 45,
 
   title = " 翻译／词典 ",
-  footer = " 再按 <leader>ut 进入 ",
+  footer = "",
   border = "rounded",
   width = 84,                          -- ratio or absolute columns
   height = 28,                         -- ratio or absolute lines
+  scroll_up_key = "<C-u>",            -- false disables either mapping
+  scroll_down_key = "<C-d>",
   stream_update_interval = 160,
 }
 ```
@@ -111,21 +118,28 @@ opts = {
   or short fixed expression gets a dictionary card; a complete clause, sentence,
   dialogue, or paragraph gets the translation followed by useful language notes.
 - The exact source remains at the top of the floating window while streamed
-  Markdown arrives below it. Dictionary entries group morphology and IPA by
-  grammatical reading; passages use separate translation and explanation sections.
-- Invoke it again while the floating window is open to focus the result for
-  scrolling or copying. The footer keeps this action discoverable.
+  Markdown arrives below it. A word is rendered as the level-one headword;
+  dictionary entries group lemma and inflection metadata, pronunciation, grammar,
+  collocations, and bilingual examples like a learner's dictionary. Passages use
+  separate translation and explanation sections.
+- While focus remains in the source window, the default `<C-u>` and `<C-d>` keys
+  scroll the translation result. These temporary buffer-local mappings are removed
+  when the result closes, revealing any prior mapping or native behavior.
+- Integrations can call `focus()` from an existing documentation key such as `K`
+  to enter the result for selecting or copying.
 - Press `Esc` inside the result to close it.
 - Run `:Translate` to translate the word under the cursor.
 
 ```lua
 require("nvim-translate").translate()
+require("nvim-translate").focus()
 require("nvim-translate").cancel()
 require("nvim-translate").clear_cache()
 ```
 
-Only the selected source text and the configured analysis prompt are sent to the
-configured provider. The cache exists only for the current Neovim process.
+Only the selected source text, a `dictionary` or `auto` mode label, and the
+configured analysis prompt are sent to the configured provider. The cache exists
+only for the current Neovim process.
 
 ## Tests
 
