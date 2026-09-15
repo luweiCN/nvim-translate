@@ -17,6 +17,8 @@ Cloud Model Studio's OpenAI-compatible API with Qwen3.7-Flash.
   callout.
 - Stream complete Markdown lines into a fixed-size, focusable floating window,
   with throttled redraws, cancellation, and stale-response protection.
+- Keep translation displays free of document diagnostics while retaining the
+  `markdown` filetype for rendering.
 - Scroll the result with configurable source-buffer keys without entering the
   floating window, while preserving and restoring existing buffer mappings.
 - Integrate automatically with render-markdown.nvim when it is configured for
@@ -100,7 +102,7 @@ plugin itself should own the mapping.
   height = 28,                         -- ratio or absolute lines
   scroll_up_key = "<C-u>",            -- false disables either mapping
   scroll_down_key = "<C-d>",
-  stream_update_interval = 160,
+  stream_update_interval = 50,
 }
 ```
 
@@ -131,6 +133,10 @@ opts = {
   dictionary entries group lemma and inflection metadata, pronunciation, grammar,
   collocations, and bilingual examples like a learner's dictionary. Passages use
   separate translation and explanation sections.
+- Result buffers are read-only displays, not authored Markdown documents.
+  Diagnostics are disabled for these buffers; integrations can exclude them
+  from document linters using the buffer-local `b:nvim_translate` flag. Ordinary
+  Markdown files retain their own diagnostic and lint settings.
 - While focus remains in the source window, the default `<C-u>` and `<C-d>` keys
   scroll the translation result. These temporary buffer-local mappings are removed
   when the result closes, revealing any prior mapping or native behavior.
@@ -138,8 +144,13 @@ opts = {
   to enter the result for selecting or copying.
 - Invoke the configured translation mapping again from either window to close
   the current result and cancel an unfinished request.
-- Press `Esc` inside the result to close it. Leaving a focused result window also
-  closes it instead of leaving an unreachable floating window behind.
+- In Normal mode, press `Esc` in either the source or result window to close the
+  result and cancel an unfinished request. The source mapping is temporary:
+  closing restores the prior buffer-local mapping or reveals the global/native
+  behavior. Visual and Insert mode keep their normal mode-exit behavior. Scroll
+  keys cannot reuse `Esc` (including `<C-[>`).
+- Leaving a focused result window also closes it instead of leaving an
+  unreachable floating window behind.
 - Run `:Translate` to translate the word under the cursor.
 - Run `:TranslateInput` to enter a word or sentence in `vim.ui.input`. The current
   UI provider can supply a floating input box. Cancelled or empty input sends no

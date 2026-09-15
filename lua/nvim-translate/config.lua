@@ -160,7 +160,7 @@ Do not fabricate linguistic facts or add generic observations.
   scroll_up_key = "<C-u>",
   scroll_down_key = "<C-d>",
 
-  stream_update_interval = 160,
+  stream_update_interval = 50,
 }
 
 M.options = vim.deepcopy(M.defaults)
@@ -205,6 +205,11 @@ local function validate(opts)
   validate_key("cache_dir", opts.cache_dir)
   if opts.scroll_up_key ~= false and opts.scroll_up_key == opts.scroll_down_key then
     error("[nvim-translate] scroll keys must be different", 3)
+  end
+  for _, name in ipairs({ "scroll_up_key", "scroll_down_key" }) do
+    if opts[name] ~= false and vim.api.nvim_replace_termcodes(opts[name], true, true, true) == "\27" then
+      error(("[nvim-translate] %s cannot use Escape, which closes the result"):format(name), 3)
+    end
   end
 
   for _, name in ipairs({

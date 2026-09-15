@@ -21,7 +21,7 @@ test("Qwen defaults are internally consistent", function()
   equal("qwen3.7-flash", opts.model)
   equal({ enable_thinking = false }, opts.extra_body)
   equal(true, opts.stream)
-  equal(160, opts.stream_update_interval)
+  equal(50, opts.stream_update_interval)
   equal(84, opts.width)
   equal(28, opts.height)
   equal("", opts.footer)
@@ -52,6 +52,10 @@ test("source scrolling can be disabled but its keys cannot collide", function()
   equal(false, opts.scroll_down_key)
   local ok = pcall(config.setup, { scroll_up_key = "gk", scroll_down_key = "gk" })
   equal(false, ok)
+  for _, key in ipairs({ "<Esc>", "<C-[>" }) do
+    equal(false, pcall(config.setup, { scroll_up_key = key }))
+    equal(false, pcall(config.setup, { scroll_down_key = key }))
+  end
 end)
 
 test("cache evicts the least recently used entry", function()
@@ -256,6 +260,9 @@ test("hover can be updated, focused, and closed once", function()
 
   assert(vim.api.nvim_win_is_valid(win))
   equal("markdown", vim.bo[buf].filetype)
+  equal(true, vim.b[buf].nvim_translate)
+  equal(false, vim.diagnostic.is_enabled({ bufnr = buf }))
+  equal(true, vim.diagnostic.is_enabled({ bufnr = source_buf }))
   local initial_width = vim.api.nvim_win_get_width(win)
   local initial_height = vim.api.nvim_win_get_height(win)
   local text_changes = 0
@@ -297,6 +304,46 @@ test("hover can be updated, focused, and closed once", function()
   restored_scroll_up.callback()
   equal(1, restored_scrolls)
   vim.keymap.del("n", "<C-u>", { buffer = source_buf })
+end)
+
+test("source Escape closes the result and restores existing mappings", function()
+  require("nvim-translate.config").setup({ width = 40, height = 5 })
+  local hover = require("nvim-translate.hover")
+  local source_win = vim.api.nvim_get_current_win()
+  local source_buf = vim.api.nvim_get_current_buf()
+  local global_escape = vim.fn.maparg("<Esc>", "n", false, true)
+  local insert_escape = vim.fn.maparg("<Esc>", "i", false, true)
+  local visual_escape = vim.fn.maparg("<Esc>", "x", false, true)
+  local closes, restored = 0, 0
+  vim.keymap.set("n", "<Esc>", function()
+    restored = restored + 1
+    return ""
+  end, { buffer = source_buf, expr = true, replace_keycodes = false, desc = "Existing Escape" })
+  local original = vim.fn.maparg("<Esc>", "n", false, true)
+  local _, win = hover.show({ "# hello" }, {
+    on_close = function()
+      closes = closes + 1
+    end,
+  })
+  local escape = vim.fn.maparg("<Esc>", "n", false, true)
+  assert(escape.callback ~= original.callback)
+  equal(1, escape.buffer)
+  escape.callback()
+  equal(false, hover.is_open())
+  equal(false, vim.api.nvim_win_is_valid(win))
+  equal(source_win, vim.api.nvim_get_current_win())
+  equal(1, closes)
+  equal(original, vim.fn.maparg("<Esc>", "n", false, true))
+  vim.fn.maparg("<Esc>", "n", false, true).callback()
+  equal(1, restored)
+  vim.keymap.del("n", "<Esc>", { buffer = source_buf })
+
+  hover.show({ "# hello" })
+  equal(1, vim.fn.maparg("<Esc>", "n", false, true).buffer)
+  vim.fn.maparg("<Esc>", "n", false, true).callback()
+  equal(global_escape, vim.fn.maparg("<Esc>", "n", false, true))
+  equal(insert_escape, vim.fn.maparg("<Esc>", "i", false, true))
+  equal(visual_escape, vim.fn.maparg("<Esc>", "x", false, true))
 end)
 
 test("streamed content appears with the source before completion", function()
@@ -344,7 +391,7 @@ test("streamed content appears with the source before completion", function()
 
   local config = require("nvim-translate.config")
   local cache = require("nvim-translate.cache")
-  config.setup({ api_key = "test", stream_update_interval = 1 })
+  config.setup({ api_key = "test" })
   cache.setup(10, false)
   local translate = require("nvim-translate.translate")
 
@@ -364,6 +411,7 @@ test("streamed content appears with the source before completion", function()
   equal(initial_updates, #displays)
 
   chunk_callbacks[1](" · 名词 [C 可数]\n**UK**")
+  equal(initial_updates, #displays)
   assert(vim.wait(100, function()
     return displays[#displays]:find("## noun · 名词 [C 可数]", 1, true) ~= nil
   end))

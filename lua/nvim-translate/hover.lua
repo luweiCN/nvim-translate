@@ -43,10 +43,7 @@ local function contains(anchor, position)
 end
 
 local function normalized_lhs(lhs)
-  if lhs:match("^<.*>$") then
-    return lhs:upper()
-  end
-  return lhs
+  return vim.api.nvim_replace_termcodes(lhs, true, true, true)
 end
 
 local function buffer_mapping(buf, lhs)
@@ -71,27 +68,18 @@ local function restore_source_keymaps()
     if current and current.callback == entry.callback then
       pcall(vim.keymap.del, "n", entry.lhs, { buffer = buf })
       if entry.previous then
-        local previous = entry.previous
-        pcall(vim.api.nvim_buf_set_keymap, buf, "n", previous.lhs, previous.rhs or "", {
-          callback = previous.callback,
-          desc = previous.desc,
-          expr = previous.expr == 1,
-          noremap = previous.noremap == 1,
-          nowait = previous.nowait == 1,
-          silent = previous.silent == 1,
-        })
+        vim.api.nvim_buf_call(buf, function()
+          vim.fn.mapset("n", false, entry.previous)
+        end)
       end
     end
   end
   state.source_keymaps = {}
 end
 
-local function install_source_keymap(lhs, direction)
+local function install_source_keymap(lhs, callback, desc)
   if lhs == false then
     return
-  end
-  local callback = function()
-    M.scroll(direction)
   end
   state.source_keymaps[#state.source_keymaps + 1] = {
     lhs = lhs,
@@ -100,7 +88,7 @@ local function install_source_keymap(lhs, direction)
   }
   vim.keymap.set("n", lhs, callback, {
     buffer = state.source_buf,
-    desc = direction < 0 and "Scroll translation result up" or "Scroll translation result down",
+    desc = desc,
     nowait = true,
     silent = true,
   })
@@ -162,6 +150,8 @@ function M.show(lines, opts)
   local win
   vim.api.nvim_win_call(source_win, function()
     buf = vim.api.nvim_create_buf(false, true)
+    vim.b[buf].nvim_translate = true
+    vim.diagnostic.enable(false, { bufnr = buf })
     vim.bo[buf].bufhidden = "wipe"
     vim.bo[buf].swapfile = false
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -197,8 +187,15 @@ function M.show(lines, opts)
   state.anchor = opts.anchor
   state.on_close = opts.on_close
   state.augroup = vim.api.nvim_create_augroup("NvimTranslateHover", { clear = true })
-  install_source_keymap(cfg.scroll_up_key, -1)
-  install_source_keymap(cfg.scroll_down_key, 1)
+  install_source_keymap(cfg.scroll_up_key, function()
+    M.scroll(-1)
+  end, "Scroll translation result up")
+  install_source_keymap(cfg.scroll_down_key, function()
+    M.scroll(1)
+  end, "Scroll translation result down")
+  install_source_keymap("<Esc>", function()
+    close(true)
+  end, "Close translation or dictionary")
 
   vim.keymap.set("n", "<Esc>", function()
     close(true)
