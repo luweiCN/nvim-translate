@@ -21,7 +21,10 @@ test("Qwen defaults are internally consistent", function()
   equal("qwen3.7-flash", opts.model)
   equal({ enable_thinking = false }, opts.extra_body)
   equal(true, opts.stream)
-  equal(80, opts.stream_update_interval)
+  equal(160, opts.stream_update_interval)
+  equal(84, opts.width)
+  equal(28, opts.height)
+  equal(" 再按 <leader>ut 进入 ", opts.footer)
   equal(" 翻译／词典 ", opts.title)
   assert(opts.prompt:find("## 发音与词形", 1, true))
   assert(opts.prompt:find("## 译文", 1, true))
@@ -160,12 +163,25 @@ test("hover can be updated, focused, and closed once", function()
   assert(vim.api.nvim_win_is_valid(win))
   equal("markdown", vim.bo[buf].filetype)
   local initial_width = vim.api.nvim_win_get_width(win)
+  local initial_height = vim.api.nvim_win_get_height(win)
+  local text_changes = 0
+  vim.api.nvim_create_autocmd("TextChanged", {
+    buffer = buf,
+    callback = function()
+      text_changes = text_changes + 1
+    end,
+  })
   local updated_line = "你好，世界：" .. string.rep("x", 30)
   hover.update({ updated_line })
   equal(updated_line, vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1])
-  assert(vim.api.nvim_win_get_width(win) > initial_width)
+  equal(1, text_changes)
+  equal(initial_width, vim.api.nvim_win_get_width(win))
+  equal(initial_height, vim.api.nvim_win_get_height(win))
+  assert(vim.inspect(vim.api.nvim_win_get_config(win).footer):find("<leader>ut", 1, true))
   hover.focus()
   equal(win, vim.api.nvim_get_current_win())
+  equal("", vim.fn.maparg("<C-d>", "n"))
+  equal("", vim.fn.maparg("<C-u>", "n"))
   hover.close()
   equal(false, hover.is_open())
   equal(1, closes)
@@ -177,6 +193,7 @@ test("streamed content appears with the source before completion", function()
   local displays = {}
   local open = false
   local on_close
+  local focuses = 0
 
   package.loaded["nvim-translate.llm"] = {
     chat = function(_, callback, on_chunk)
@@ -194,7 +211,9 @@ test("streamed content appears with the source before completion", function()
     is_open = function()
       return open
     end,
-    focus = function() end,
+    focus = function()
+      focuses = focuses + 1
+    end,
     show = function(value, opts)
       open = true
       on_close = opts.on_close
@@ -214,7 +233,7 @@ test("streamed content appears with the source before completion", function()
 
   local config = require("nvim-translate.config")
   local cache = require("nvim-translate.cache")
-  config.setup({ api_key = "test", spinner_interval = 100000, stream_update_interval = 1 })
+  config.setup({ api_key = "test", stream_update_interval = 1 })
   cache.setup(10)
   local translate = require("nvim-translate.translate")
 
@@ -224,14 +243,31 @@ test("streamed content appears with the source before completion", function()
   assert(displays[1]:find("[!ABSTRACT] 词条", 1, true))
   assert(displays[1]:find("alpha", 1, true))
   equal("function", type(chunk_callbacks[1]))
+  translate.translate()
+  equal(1, focuses)
+  equal(1, #callbacks)
 
-  chunk_callbacks[1]("## 发音与词形")
+  local initial_updates = #displays
+  vim.wait(250)
+  equal(initial_updates, #displays)
+
+  chunk_callbacks[1]("## 发音")
+  vim.wait(20)
+  equal(initial_updates, #displays)
+
+  chunk_callbacks[1]("与词形\n- **原形**")
   assert(vim.wait(100, function()
     return displays[#displays]:find("## 发音与词形", 1, true) ~= nil
   end))
+  assert(not displays[#displays]:find("**原形**", 1, true))
   assert(displays[#displays]:find("alpha", 1, true))
 
-  callbacks[1]("## 发音与词形\n完整结果", nil)
+  chunk_callbacks[1](" `alpha`\n")
+  assert(vim.wait(100, function()
+    return displays[#displays]:find("**原形** `alpha`", 1, true) ~= nil
+  end))
+
+  callbacks[1]("## 发音与词形\n- **原形** `alpha`\n完整结果", nil)
   assert(vim.wait(100, function()
     return displays[#displays]:find("完整结果", 1, true) ~= nil
   end))
@@ -290,7 +326,7 @@ test("a cached result invalidates an older pending response", function()
 
   local config = require("nvim-translate.config")
   local cache = require("nvim-translate.cache")
-  config.setup({ api_key = "test", spinner_interval = 100000 })
+  config.setup({ api_key = "test" })
   cache.setup(10)
   local translate = require("nvim-translate.translate")
 

@@ -98,13 +98,12 @@ Do not fabricate linguistic facts or add generic observations.
   timeout = 45,
 
   title = " 翻译／词典 ",
+  footer = " 再按 <leader>ut 进入 ",
   border = "rounded",
-  max_width = 0.7,
-  max_height = 0.6,
+  width = 84,
+  height = 28,
 
-  spinner_frames = { "|", "/", "-", "\\" },
-  spinner_interval = 120,
-  stream_update_interval = 80,
+  stream_update_interval = 160,
 }
 
 M.options = vim.deepcopy(M.defaults)
@@ -131,6 +130,7 @@ local function validate(opts)
   assert_type("stream", opts.stream, "boolean")
   assert_type("extra_body", opts.extra_body, "table")
   assert_type("title", opts.title, "string")
+  assert_type("footer", opts.footer, "string")
 
   if opts.model == "" then
     error("[nvim-translate] model must not be empty", 3)
@@ -148,9 +148,8 @@ local function validate(opts)
     "max_cache_size",
     "connect_timeout",
     "timeout",
-    "max_width",
-    "max_height",
-    "spinner_interval",
+    "width",
+    "height",
     "stream_update_interval",
   }) do
     assert_type(name, opts[name], "number")
@@ -165,19 +164,11 @@ local function validate(opts)
   if opts.connect_timeout <= 0 or opts.timeout <= 0 then
     error("[nvim-translate] request timeouts must be positive", 3)
   end
-  if opts.max_width <= 0 or opts.max_height <= 0 then
+  if opts.width <= 0 or opts.height <= 0 then
     error("[nvim-translate] window dimensions must be positive", 3)
   end
-  if
-    opts.spinner_interval <= 0
-    or opts.stream_update_interval <= 0
-    or not vim.islist(opts.spinner_frames)
-    or #opts.spinner_frames == 0
-  then
-    error("[nvim-translate] spinner frames and update intervals must be valid", 3)
-  end
-  for _, frame in ipairs(opts.spinner_frames) do
-    assert_type("spinner frame", frame, "string")
+  if opts.stream_update_interval <= 0 then
+    error("[nvim-translate] stream_update_interval must be positive", 3)
   end
 end
 
@@ -186,13 +177,9 @@ function M.setup(opts)
   assert_type("options", opts, "table")
 
   local merged = vim.tbl_deep_extend("force", {}, M.defaults, opts)
-  -- Empty dictionaries and shorter lists must replace provider/UI defaults,
-  -- otherwise users cannot remove provider-specific fields or frames.
+  -- An empty dictionary must replace provider defaults rather than merge them.
   if rawget(opts, "extra_body") ~= nil then
     merged.extra_body = vim.deepcopy(opts.extra_body)
-  end
-  if rawget(opts, "spinner_frames") ~= nil then
-    merged.spinner_frames = vim.deepcopy(opts.spinner_frames)
   end
 
   validate(merged)

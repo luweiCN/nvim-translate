@@ -7,18 +7,6 @@ local M = {}
 
 local generation = 0
 local process
-local spinner
-
-local function stop_spinner()
-  if not spinner then
-    return
-  end
-  spinner:stop()
-  if not spinner:is_closing() then
-    spinner:close()
-  end
-  spinner = nil
-end
 
 local function stop_process()
   if not process then
@@ -32,7 +20,6 @@ end
 
 local function invalidate()
   generation = generation + 1
-  stop_spinner()
   stop_process()
   return generation
 end
@@ -124,22 +111,13 @@ local function display_lines(source, content)
   return lines(source .. "\n\n" .. content)
 end
 
-local function start_spinner(id, source)
-  local opts = config.get()
-  local frame = 1
-  spinner = vim.uv.new_timer()
-  spinner:start(
-    0,
-    opts.spinner_interval,
-    vim.schedule_wrap(function()
-      if id ~= generation or not hover.is_open() then
-        stop_spinner()
-        return
-      end
-      hover.update(display_lines(source, ("_%s 分析中…_"):format(opts.spinner_frames[frame])))
-      frame = frame % #opts.spinner_frames + 1
-    end)
-  )
+local function complete_lines(value)
+  for index = #value, 1, -1 do
+    if value:byte(index) == 10 then
+      return value:sub(1, index)
+    end
+  end
+  return nil
 end
 
 function M.translate()
@@ -186,28 +164,30 @@ function M.translate()
     return
   end
 
-  hover.show(display_lines(source, "_| 分析中…_"), hover_opts)
-  start_spinner(id, source)
+  hover.show(display_lines(source, "_正在等待响应…_"), hover_opts)
 
   local streamed = ""
+  local rendered = ""
   local stream_render_pending = false
-  local stream_rendered = false
+  local stream_finished = false
 
   local function on_chunk(chunk)
     streamed = streamed .. chunk
-    if stream_render_pending then
+    if stream_render_pending or stream_finished then
       return
     end
     stream_render_pending = true
     vim.defer_fn(function()
       stream_render_pending = false
-      if id ~= generation or not hover.is_open() then
+      if id ~= generation or stream_finished or not hover.is_open() then
         return
       end
-      stream_rendered = true
-      stop_spinner()
-      hover.update(display_lines(source, streamed))
-    end, stream_rendered and opts.stream_update_interval or 0)
+      local stable = complete_lines(streamed)
+      if stable and stable ~= rendered then
+        rendered = stable
+        hover.update(display_lines(source, stable))
+      end
+    end, opts.stream_update_interval)
   end
 
   local current_process = llm.chat({
@@ -225,12 +205,12 @@ function M.translate()
     connect_timeout = opts.connect_timeout,
     timeout = opts.timeout,
   }, function(result, request_error)
+    stream_finished = true
     vim.schedule(function()
       if id ~= generation then
         return
       end
       process = nil
-      stop_spinner()
       if not hover.is_open() then
         return
       end

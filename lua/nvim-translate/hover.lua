@@ -15,38 +15,13 @@ local state = {
 local closing = false
 
 local function window_size(value, total)
+  local size
   if value <= 1 then
-    return math.max(1, math.floor(total * value))
+    size = math.floor(total * value)
+  else
+    size = math.floor(value)
   end
-  return math.floor(value)
-end
-
-local function content_size(lines)
-  local cfg = config.get()
-  local max_width = window_size(cfg.max_width, vim.o.columns)
-  local max_height = window_size(cfg.max_height, vim.o.lines)
-  local width = 1
-  for _, line in ipairs(lines) do
-    width = math.max(width, vim.fn.strdisplaywidth(line))
-  end
-  width = math.min(width, max_width)
-
-  local height = 0
-  for _, line in ipairs(lines) do
-    height = height + math.max(1, math.ceil(vim.fn.strdisplaywidth(line) / width))
-  end
-  return width, math.min(math.max(1, height), max_height)
-end
-
-local function resize(lines)
-  if not state.win or not vim.api.nvim_win_is_valid(state.win) then
-    return
-  end
-  local width, height = content_size(lines)
-  local win_config = vim.api.nvim_win_get_config(state.win)
-  win_config.width = width
-  win_config.height = height
-  vim.api.nvim_win_set_config(state.win, win_config)
+  return math.max(1, math.min(size, math.max(1, total - 4)))
 end
 
 local function contains(anchor, position)
@@ -119,19 +94,34 @@ function M.show(lines, opts)
   local buf
   local win
   vim.api.nvim_win_call(source_win, function()
-    buf, win = vim.lsp.util.open_floating_preview(lines, "markdown", {
-      border = cfg.border,
-      close_events = {},
-      focus = false,
-      focusable = true,
-      max_width = window_size(cfg.max_width, vim.o.columns),
-      max_height = window_size(cfg.max_height, vim.o.lines),
-      title = cfg.title,
-      title_pos = "center",
-      wrap = true,
-    })
+    buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].swapfile = false
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+
+    local win_config = vim.lsp.util.make_floating_popup_options(
+      window_size(cfg.width, vim.o.columns),
+      window_size(cfg.height, vim.o.lines),
+      {
+        border = cfg.border,
+        focusable = true,
+        title = cfg.title,
+        title_pos = "center",
+      }
+    )
+    if cfg.footer ~= "" then
+      win_config.footer = cfg.footer
+      win_config.footer_pos = "right"
+    end
+    win = vim.api.nvim_open_win(buf, false, win_config)
+    vim.wo[win].foldenable = false
+    vim.wo[win].wrap = true
+    vim.wo[win].linebreak = true
+    vim.wo[win].breakindent = true
+    vim.wo[win].smoothscroll = true
+    vim.bo[buf].filetype = "markdown"
+    vim.bo[buf].modifiable = false
   end)
-  vim.bo[buf].filetype = "markdown"
 
   state.win = win
   state.buf = buf
@@ -185,7 +175,10 @@ function M.update(lines)
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
   vim.bo[state.buf].modifiable = false
-  resize(lines)
+  vim.api.nvim_exec_autocmds("TextChanged", {
+    buffer = state.buf,
+    modeline = false,
+  })
 end
 
 function M.focus()

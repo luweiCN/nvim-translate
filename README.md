@@ -9,14 +9,14 @@ Cloud Model Studio's OpenAI-compatible API with Qwen3.7-Flash.
 - Translate a Visual selection and explain only its useful sentence patterns
   and vocabulary.
 - Repeat the exact word or source passage in a styled Markdown callout.
-- Stream the result into a focusable Markdown floating window, with throttled
-  redraws, cancellation, and stale-response protection.
+- Stream complete Markdown lines into a fixed-size, focusable floating window,
+  with throttled redraws, cancellation, and stale-response protection.
 - Integrate automatically with render-markdown.nvim when it is configured for
   the `markdown` filetype.
 - Cache repeated translations in memory with an LRU cache.
 - Keep the API key and source text out of `curl` command-line arguments.
-- Configure the endpoint, model, prompt, provider-specific request fields, timeouts,
-  spinner, and window.
+- Configure the endpoint, model, prompt, provider-specific request fields,
+  timeouts, and window.
 
 ## Requirements
 
@@ -82,12 +82,11 @@ plugin itself should own the mapping.
   timeout = 45,
 
   title = " 翻译／词典 ",
+  footer = " 再按 <leader>ut 进入 ",
   border = "rounded",
-  max_width = 0.7,                     -- ratio or absolute columns
-  max_height = 0.6,                    -- ratio or absolute lines
-  spinner_frames = { "|", "/", "-", "\\" },
-  spinner_interval = 120,
-  stream_update_interval = 80,
+  width = 84,                          -- ratio or absolute columns
+  height = 28,                         -- ratio or absolute lines
+  stream_update_interval = 160,
 }
 ```
 
@@ -115,7 +114,7 @@ opts = {
   Markdown arrives below it. Dictionary entries group morphology and IPA by
   grammatical reading; passages use separate translation and explanation sections.
 - Invoke it again while the floating window is open to focus the result for
-  copying.
+  scrolling or copying. The footer keeps this action discoverable.
 - Press `Esc` inside the result to close it.
 - Run `:Translate` to translate the word under the cursor.
 
