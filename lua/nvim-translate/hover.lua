@@ -2,107 +2,156 @@ local config = require("nvim-translate.config")
 
 local M = {}
 
--- Internal state tracking the current hover window lifecycle
 local state = {
   win = nil,
   buf = nil,
   source_win = nil,
   source_buf = nil,
-  trigger_mode = nil,
-  translated_word = nil,
+  anchor = nil,
   augroup = nil,
-  dismissed = false, -- true when user dismissed the hover
+  on_close = nil,
+  focusing = false,
 }
-
--- Re-entrance guard
 local closing = false
+
+local function window_size(value, total)
+  if value <= 1 then
+    return math.max(1, math.floor(total * value))
+  end
+  return math.floor(value)
+end
+
+local function contains(anchor, position)
+  if not anchor then
+    return true
+  end
+  local row, col = position[1], position[2]
+  if row < anchor.start_row or row > anchor.end_row then
+    return false
+  end
+  if row == anchor.start_row and col < anchor.start_col then
+    return false
+  end
+  if row == anchor.end_row and col > anchor.end_col then
+    return false
+  end
+  return true
+end
+
+local function close(notify)
+  if closing then
+    return
+  end
+  closing = true
+
+  local win = state.win
+  local callback = state.on_close
+  if state.augroup then
+    pcall(vim.api.nvim_del_augroup_by_id, state.augroup)
+  end
+
+  state.win = nil
+  state.buf = nil
+  state.source_win = nil
+  state.source_buf = nil
+  state.anchor = nil
+  state.augroup = nil
+  state.on_close = nil
+  state.focusing = false
+
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+  closing = false
+
+  if notify and callback then
+    callback()
+  end
+end
 
 function M.is_open()
   return state.win ~= nil and vim.api.nvim_win_is_valid(state.win)
 end
 
-function M.is_dismissed()
-  return state.dismissed
-end
-
 function M.show(lines, opts)
   opts = opts or {}
+  close(false)
 
-  M.close()
-
-  -- Reset dismissed flag for new hover
-  state.dismissed = false
-
-  -- Sanitize lines: ensure non-empty table with at least one line
   if not lines or #lines == 0 then
     lines = { "" }
+  end
+
+  local source_win = opts.source_win or vim.api.nvim_get_current_win()
+  local source_buf = opts.source_buf or vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_win_is_valid(source_win) or not vim.api.nvim_buf_is_valid(source_buf) then
+    return nil, nil
   end
 
   local cfg = config.get()
-  local bn, wn = vim.lsp.util.open_floating_preview(lines, "markdown", {
-    focus = false,
-    border = cfg.border,
-    close_events = {},
-  })
-
-  state.win = wn
-  state.buf = bn
-  state.source_win = vim.api.nvim_get_current_win()
-  state.source_buf = vim.api.nvim_get_current_buf()
-  state.trigger_mode = opts.trigger_mode
-  state.translated_word = opts.translated_word
-
-  state.augroup = vim.api.nvim_create_augroup("NvimTranslate", { clear = true })
-
-  if opts.trigger_mode == "n" and opts.translated_word then
-    -- Normal mode: close when cursor leaves the translated word
-    vim.api.nvim_create_autocmd("CursorMoved", {
-      buffer = state.source_buf,
-      group = state.augroup,
-      callback = function()
-        if closing or not M.is_open() then
-          return
-        end
-        local cur_word = vim.fn.expand("<cword>")
-        if cur_word ~= state.translated_word then
-          M.close()
-        end
-      end,
+  local buf
+  local win
+  vim.api.nvim_win_call(source_win, function()
+    buf, win = vim.lsp.util.open_floating_preview(lines, "markdown", {
+      border = cfg.border,
+      close_events = {},
+      focus = false,
+      focusable = true,
+      max_width = window_size(cfg.max_width, vim.o.columns),
+      max_height = window_size(cfg.max_height, vim.o.lines),
+      title = " Translation ",
+      title_pos = "center",
+      wrap = true,
     })
-  elseif opts.trigger_mode == "v" then
-    -- Visual mode: close when user leaves visual mode (e.g. presses Esc)
-    vim.api.nvim_create_autocmd("ModeChanged", {
-      group = state.augroup,
-      pattern = { "v:*", "V:*", "\22:*" },
-      callback = function()
-        if M.is_open() then
-          M.close()
-        end
-      end,
-    })
-  end
+  end)
 
-  -- Always allow <Esc> inside the hover buffer to close it
-  vim.api.nvim_buf_set_keymap(bn, "n", "<Esc>", "", {
+  state.win = win
+  state.buf = buf
+  state.source_win = source_win
+  state.source_buf = source_buf
+  state.anchor = opts.anchor
+  state.on_close = opts.on_close
+  state.augroup = vim.api.nvim_create_augroup("NvimTranslateHover", { clear = true })
+
+  vim.keymap.set("n", "<Esc>", function()
+    close(true)
+  end, { buffer = buf, desc = "Close translation", silent = true })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = state.augroup,
+    pattern = tostring(win),
+    once = true,
     callback = function()
-      M.close()
+      close(true)
     end,
-    noremap = true,
-    silent = true,
-    desc = "Close translate hover",
+  })
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    group = state.augroup,
+    buffer = source_buf,
+    callback = function()
+      if state.focusing or vim.api.nvim_get_current_win() ~= source_win then
+        return
+      end
+      if not contains(state.anchor, vim.api.nvim_win_get_cursor(source_win)) then
+        close(true)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave" }, {
+    group = state.augroup,
+    buffer = source_buf,
+    callback = function()
+      if not state.focusing then
+        close(true)
+      end
+    end,
   })
 
-  return bn, wn
+  return buf, win
 end
 
---- Update the content of the current hover window without recreating it.
---- @param lines table Array of strings to display
 function M.update(lines)
-  if not M.is_open() or not state.buf then
+  if not M.is_open() or not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     return
-  end
-  if not lines or #lines == 0 then
-    lines = { "" }
   end
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
@@ -113,40 +162,13 @@ function M.focus()
   if not M.is_open() then
     return
   end
-
-  if state.augroup then
-    vim.api.nvim_clear_autocmds({ group = state.augroup })
-  end
-
+  state.focusing = true
   vim.api.nvim_set_current_win(state.win)
+  state.focusing = false
 end
 
-function M.close()
-  if closing then
-    return
-  end
-  closing = true
-
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    pcall(vim.api.nvim_win_close, state.win, true)
-  end
-
-  if state.augroup then
-    pcall(vim.api.nvim_clear_autocmds, { group = state.augroup })
-  end
-
-  -- Mark as dismissed so pending LLM callbacks know not to show
-  state.dismissed = true
-
-  state.win = nil
-  state.buf = nil
-  state.source_win = nil
-  state.source_buf = nil
-  state.trigger_mode = nil
-  state.translated_word = nil
-  state.augroup = nil
-
-  closing = false
+function M.close(notify)
+  close(notify ~= false)
 end
 
 return M

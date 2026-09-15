@@ -1,43 +1,47 @@
-local config = require("nvim-translate.config")
 local cache = require("nvim-translate.cache")
+local config = require("nvim-translate.config")
 
 local M = {}
+local mapped_key
 
---- Setup the plugin with user options.
---- @param opts table|nil User configuration to merge with defaults.
+local function remove_mapping()
+  if not mapped_key then
+    return
+  end
+  for _, mode in ipairs({ "n", "x" }) do
+    pcall(vim.keymap.del, mode, mapped_key)
+  end
+  mapped_key = nil
+end
+
 function M.setup(opts)
-  -- Load and merge configuration
-  config.setup(opts)
+  require("nvim-translate.translate").reset()
+  local resolved = config.setup(opts)
+  cache.setup(resolved.max_cache_size)
 
-  local cfg = config.get()
+  remove_mapping()
+  if resolved.trigger_key then
+    mapped_key = resolved.trigger_key
+    vim.keymap.set({ "n", "x" }, mapped_key, M.translate, {
+      desc = "Translate text",
+      silent = true,
+    })
+  end
 
-  -- Initialize cache
-  cache.setup(cfg.max_cache_size)
-
-  -- Register trigger key for normal and visual modes
-  vim.keymap.set({ "n", "x" }, cfg.trigger_key, function()
-    require("nvim-translate.translate").translate()
-  end, {
-    desc = "Translate text",
-    silent = true,
-  })
-
-  -- Register user command :Translate
-  vim.api.nvim_create_user_command("Translate", function()
-    require("nvim-translate.translate").translate()
-  end, {
-    desc = "Translate text under cursor or selection",
+  pcall(vim.api.nvim_del_user_command, "Translate")
+  vim.api.nvim_create_user_command("Translate", M.translate, {
+    desc = "Translate word under cursor",
   })
 end
 
--- Public API
-
---- Trigger translation (for custom keymaps).
 function M.translate()
   require("nvim-translate.translate").translate()
 end
 
---- Clear the translation cache.
+function M.cancel()
+  require("nvim-translate.translate").cancel()
+end
+
 function M.clear_cache()
   cache.clear()
   vim.notify("[nvim-translate] Cache cleared", vim.log.levels.INFO)

@@ -1,199 +1,229 @@
-local config = require("nvim-translate.config")
 local cache = require("nvim-translate.cache")
-local llm = require("nvim-translate.llm")
+local config = require("nvim-translate.config")
 local hover = require("nvim-translate.hover")
+local llm = require("nvim-translate.llm")
 
 local M = {}
 
--- Request ID to discard stale LLM responses
-local request_id = 0
+local generation = 0
+local process
+local spinner
 
--- Spinner state
-local spinner_timer = nil
-local spinner_idx = 1
-
-local spinner_stop -- forward declaration
-
-local function spinner_start()
-  spinner_stop()
-  local cfg = config.get()
-  local frames = cfg.spinner_frames or { "|", "/", "-", "\\" }
-  local interval = cfg.spinner_interval or 120
-  spinner_idx = 1
-  spinner_timer = vim.uv.new_timer()
-  spinner_timer:start(0, interval, vim.schedule_wrap(function()
-    if not hover.is_open() then
-      spinner_stop()
-      return
-    end
-    hover.update({ "  " .. frames[spinner_idx] .. "  Translating..." })
-    spinner_idx = (spinner_idx % #frames) + 1
-  end))
-end
-
-function spinner_stop()
-  if spinner_timer then
-    spinner_timer:stop()
-    if not spinner_timer:is_closing() then
-      spinner_timer:close()
-    end
-    spinner_timer = nil
+local function stop_spinner()
+  if not spinner then
+    return
   end
-end
-
---- Resolve API key from config: string > function > env var
---- @return string|nil api_key
---- @return string|nil error_msg
-local function resolve_api_key(opts)
-  if type(opts.api_key) == "string" and opts.api_key ~= "" then
-    return opts.api_key
-  elseif type(opts.api_key) == "function" then
-    local key = opts.api_key()
-    if key and key ~= "" then
-      return key
-    end
-  elseif opts.api_key == nil and opts.api_key_env then
-    local key = os.getenv(opts.api_key_env)
-    if key and key ~= "" then
-      return key
-    end
+  spinner:stop()
+  if not spinner:is_closing() then
+    spinner:close()
   end
-  return nil, "API key not configured (set api_key or " .. (opts.api_key_env or "OPENAI_API_KEY") .. ")"
+  spinner = nil
 end
 
---- Resolve base URL from config: string > env var > fallback
---- @return string base_url
-local function resolve_base_url(opts)
-  if type(opts.base_url) == "string" and opts.base_url ~= "" then
-    return opts.base_url
-  elseif opts.base_url_env then
-    local url = os.getenv(opts.base_url_env)
-    if url and url ~= "" then
-      return url
-    end
+local function stop_process()
+  if not process then
+    return
   end
-  return "https://api.openai.com/v1"
+  if not process:is_closing() then
+    pcall(process.kill, process, "sigterm")
+  end
+  process = nil
 end
 
---- Get the input text based on the current mode.
---- @return string text, string trigger_mode, string|nil translated_word
-local function get_input()
+local function invalidate()
+  generation = generation + 1
+  stop_spinner()
+  stop_process()
+  return generation
+end
+
+local function word_anchor(word)
+  local position = vim.api.nvim_win_get_cursor(0)
+  local line = vim.api.nvim_get_current_line()
+  local from = 1
+  while true do
+    local start_col, end_col = line:find(word, from, true)
+    if not start_col then
+      break
+    end
+    local start_zero = start_col - 1
+    local end_zero = end_col - 1
+    if position[2] >= start_zero and position[2] <= end_zero then
+      return {
+        start_row = position[1],
+        end_row = position[1],
+        start_col = start_zero,
+        end_col = end_zero,
+      }
+    end
+    from = end_col + 1
+  end
+  return {
+    start_row = position[1],
+    end_row = position[1],
+    start_col = position[2],
+    end_col = position[2],
+  }
+end
+
+local function visual_anchor(first, last, mode)
+  if first[2] > last[2] or (first[2] == last[2] and first[3] > last[3]) then
+    first, last = last, first
+  end
+  return {
+    start_row = first[2],
+    end_row = last[2],
+    start_col = mode == "V" and 0 or math.max(0, first[3] - 1),
+    end_col = mode == "V" and math.huge or math.max(0, last[3] - 1),
+  }
+end
+
+local function input()
   local mode = vim.fn.mode()
-
-  if mode:match("[vV\22]") then
-    -- Visual mode: get selected text before exiting
-    local start_pos = vim.fn.getpos("v")
-    local end_pos = vim.fn.getpos(".")
-    local lines = vim.fn.getregion(start_pos, end_pos, { type = mode })
-    return table.concat(lines, "\n"), "v", nil
-  else
-    -- Normal mode: get word under cursor
-    local word = vim.fn.expand("<cword>")
-    return word, "n", word
+  if mode:match("^[vV\22]") then
+    local first = vim.fn.getpos("v")
+    local last = vim.fn.getpos(".")
+    local lines = vim.fn.getregion(first, last, { type = mode })
+    return table.concat(lines, "\n"), visual_anchor(first, last, mode)
   end
+
+  local word = vim.fn.expand("<cword>")
+  return word, word ~= "" and word_anchor(word) or nil
 end
 
---- Main translation entry point.
+local function cache_key(opts, base_url, text)
+  local values = {
+    base_url,
+    opts.model,
+    opts.prompt,
+    tostring(opts.temperature),
+    tostring(opts.max_tokens),
+    vim.json.encode(opts.extra_body),
+    text,
+  }
+  local encoded = {}
+  for index, value in ipairs(values) do
+    encoded[index] = #value .. ":" .. value
+  end
+  return vim.fn.sha256(table.concat(encoded))
+end
+
+local function lines(value)
+  return vim.split(value, "\n", { plain = true })
+end
+
+local function start_spinner(id)
+  local opts = config.get()
+  local frame = 1
+  spinner = vim.uv.new_timer()
+  spinner:start(
+    0,
+    opts.spinner_interval,
+    vim.schedule_wrap(function()
+      if id ~= generation or not hover.is_open() then
+        stop_spinner()
+        return
+      end
+      hover.update({ ("  %s  Translating..."):format(opts.spinner_frames[frame]) })
+      frame = frame % #opts.spinner_frames + 1
+    end)
+  )
+end
+
 function M.translate()
-  -- If hover is already open, jump cursor into it (for copying)
   if hover.is_open() then
     hover.focus()
     return
   end
 
-  -- Get input text
-  local text, trigger_mode, translated_word = get_input()
-
-  if text == nil or text == "" then
+  local text, anchor = input()
+  if not text or not text:match("%S") then
     vim.notify("[nvim-translate] Nothing to translate", vim.log.levels.WARN)
     return
   end
 
+  local id = invalidate()
   local opts = config.get()
+  local source_win = vim.api.nvim_get_current_win()
+  local source_buf = vim.api.nvim_get_current_buf()
+  local base_url = config.resolve_base_url()
+  local key = cache_key(opts, base_url, text)
+  local hover_opts = {
+    source_win = source_win,
+    source_buf = source_buf,
+    anchor = anchor,
+    on_close = function()
+      if id == generation then
+        invalidate()
+      end
+    end,
+  }
 
-  -- Check cache
   if opts.cache_enabled then
-    local cached = cache.get(text)
+    local cached = cache.get(key)
     if cached then
-      hover.show(vim.split(cached, "\n"), {
-        trigger_mode = trigger_mode,
-        translated_word = translated_word,
-      })
+      hover.show(lines(cached), hover_opts)
       return
     end
   end
 
-  -- Show loading indicator with spinner
-  hover.show({ "  |  Translating..." }, {
-    trigger_mode = trigger_mode,
-    translated_word = translated_word,
-  })
-  spinner_start()
-
-  -- Resolve API key
-  local api_key, err = resolve_api_key(opts)
+  local api_key, key_error = config.resolve_api_key()
   if not api_key then
-    spinner_stop()
-    hover.show({ "[Error] " .. (err or "API key not configured") }, {
-      trigger_mode = trigger_mode,
-      translated_word = translated_word,
-    })
+    hover.show(lines("[Error] " .. key_error), hover_opts)
     return
   end
 
-  -- Increment request ID to track this request
-  request_id = request_id + 1
-  local current_id = request_id
+  hover.show({ "  |  Translating..." }, hover_opts)
+  start_spinner(id)
 
-  -- Build a fresh messages array (new session each time)
-  local messages = {
-    { role = "system", content = opts.prompt },
-    { role = "user", content = text },
-  }
-
-  -- Call LLM asynchronously
-  llm.chat({
-    messages = messages,
+  local current_process = llm.chat({
+    api_key = api_key,
+    base_url = base_url,
     model = opts.model,
+    messages = {
+      { role = "system", content = opts.prompt },
+      { role = "user", content = text },
+    },
     temperature = opts.temperature,
     max_tokens = opts.max_tokens,
-    api_key = api_key,
-    base_url = resolve_base_url(opts),
-    enable_thinking = opts.enable_thinking,
-  }, function(result, llm_err)
+    extra_body = opts.extra_body,
+    connect_timeout = opts.connect_timeout,
+    timeout = opts.timeout,
+  }, function(result, request_error)
     vim.schedule(function()
-      spinner_stop()
-
-      -- Discard stale responses
-      if current_id ~= request_id then
+      if id ~= generation then
         return
       end
-
-      -- User dismissed the hover while loading, don't show result
-      if hover.is_dismissed() then
+      process = nil
+      stop_spinner()
+      if not hover.is_open() then
         return
       end
-
-      if llm_err then
-        hover.show({ "[Error] " .. llm_err }, {
-          trigger_mode = trigger_mode,
-          translated_word = translated_word,
-        })
+      if request_error then
+        hover.show(lines("[Error] " .. request_error), hover_opts)
         return
       end
-
-      -- Cache the result
       if opts.cache_enabled then
-        cache.set(text, result)
+        cache.set(key, result)
       end
-
-      -- Display translation
-      hover.show(vim.split(result, "\n"), {
-        trigger_mode = trigger_mode,
-        translated_word = translated_word,
-      })
+      hover.show(lines(result), hover_opts)
     end)
   end)
+
+  if id == generation then
+    process = current_process
+  elseif current_process and not current_process:is_closing() then
+    pcall(current_process.kill, current_process, "sigterm")
+  end
+end
+
+function M.cancel()
+  invalidate()
+  hover.close(false)
+end
+
+function M.reset()
+  M.cancel()
 end
 
 return M

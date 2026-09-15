@@ -1,59 +1,69 @@
 local M = {}
 
-local store = {} -- key -> { value = string, order = number }
-local order_counter = 0
+local entries = {}
+local clock = 0
 local size = 0
-local max_size = 100
+local capacity = 100
 
-function M.setup(capacity)
-  max_size = capacity or 100
-  store = {}
-  order_counter = 0
+function M.setup(max_size)
+  capacity = max_size or 100
+  entries = {}
+  clock = 0
   size = 0
 end
 
 function M.get(key)
-  local entry = store[key]
+  local entry = entries[key]
   if not entry then
     return nil
   end
-  order_counter = order_counter + 1
-  entry.order = order_counter -- mark as recently used
+
+  clock = clock + 1
+  entry.used_at = clock
   return entry.value
 end
 
 function M.set(key, value)
-  if store[key] then
-    store[key].value = value
-    order_counter = order_counter + 1
-    store[key].order = order_counter
+  if capacity == 0 then
     return
   end
 
-  if size >= max_size then
-    -- evict least recently used entry
-    local oldest_key, oldest_order = nil, math.huge
-    for k, v in pairs(store) do
-      if v.order < oldest_order then
-        oldest_order = v.order
-        oldest_key = k
+  local entry = entries[key]
+  if entry then
+    clock = clock + 1
+    entry.value = value
+    entry.used_at = clock
+    return
+  end
+
+  if size >= capacity then
+    local oldest_key
+    local oldest_time = math.huge
+    for candidate, item in pairs(entries) do
+      if item.used_at < oldest_time then
+        oldest_key = candidate
+        oldest_time = item.used_at
       end
     end
     if oldest_key then
-      store[oldest_key] = nil
+      entries[oldest_key] = nil
       size = size - 1
     end
   end
 
-  order_counter = order_counter + 1
-  store[key] = { value = value, order = order_counter }
+  clock = clock + 1
+  entries[key] = { value = value, used_at = clock }
   size = size + 1
 end
 
 function M.clear()
-  store = {}
-  order_counter = 0
+  entries = {}
+  clock = 0
   size = 0
+end
+
+function M.size()
+  return size
 end
 
 return M

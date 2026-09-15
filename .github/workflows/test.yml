@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        neovim: [v0.10.4, stable]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: MunifTanjim/setup-neovim-action@5595675b7a0187e70489af966a26c43179d8ea5d # v1
+        with:
+          tag: ${{ matrix.neovim }}
+      - run: make test
