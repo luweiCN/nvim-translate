@@ -1,11 +1,13 @@
 # nvim-translate
 
-A small Neovim translation plugin backed by DeepSeek or another
-OpenAI-compatible Chat Completions API.
+A small Neovim translation and dictionary plugin. Its defaults use Alibaba
+Cloud Model Studio's OpenAI-compatible API with Qwen3.7-Flash.
 
 ## Features
 
-- Translate the word under the cursor or the current Visual selection.
+- Look up the word under the cursor as a learner's dictionary entry.
+- Translate a Visual selection and explain only its useful sentence patterns
+  and vocabulary.
 - Show the result in a focusable Markdown floating window.
 - Run requests asynchronously, with cancellation and stale-response protection.
 - Cache repeated translations in memory with an LRU cache.
@@ -21,11 +23,11 @@ OpenAI-compatible Chat Completions API.
 
 ## Installation
 
-The default configuration targets DeepSeek. Export the key before starting
-Neovim:
+The default configuration targets the Beijing region of Alibaba Cloud Model
+Studio. Export the key before starting Neovim:
 
 ```sh
-export DEEPSEEK_API_KEY="..."
+export DASHSCOPE_API_KEY="..."
 ```
 
 With lazy.nvim:
@@ -41,7 +43,7 @@ With lazy.nvim:
         require("nvim-translate").translate()
       end,
       mode = { "n", "x" },
-      desc = "Translate word or selection",
+      desc = "Translate or look up",
     },
   },
   opts = {},
@@ -56,16 +58,16 @@ plugin itself should own the mapping.
 ```lua
 {
   api_key = nil,                       -- string, function, or environment
-  api_key_env = "DEEPSEEK_API_KEY",
+  api_key_env = "DASHSCOPE_API_KEY",
   base_url = nil,                      -- explicit value takes precedence
-  base_url_env = "DEEPSEEK_BASE_URL",
-  default_base_url = "https://api.deepseek.com",
-  model = "deepseek-flash",
+  base_url_env = "DASHSCOPE_BASE_URL",
+  default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  model = "qwen3.7-flash",
 
   temperature = 0.2,
   max_tokens = 2048,
   extra_body = {
-    thinking = { type = "disabled" },
+    enable_thinking = false,
   },
   prompt = "...",
 
@@ -83,8 +85,10 @@ plugin itself should own the mapping.
 }
 ```
 
-For another OpenAI-compatible provider, override `api_key_env`, `base_url`,
-`model`, and replace `extra_body` with the fields accepted by that provider:
+Qwen3.7-Flash enables thinking by default, so `enable_thinking = false` is sent
+as a top-level request field. For another region or OpenAI-compatible provider,
+override `base_url` (or `DASHSCOPE_BASE_URL`), `api_key_env`, `model`, and replace
+`extra_body` with the fields accepted by that provider:
 
 ```lua
 opts = {
@@ -97,8 +101,10 @@ opts = {
 
 ## Usage
 
-- Invoke the configured mapping in Normal mode to translate `<cword>`.
-- Invoke it in Visual mode to translate the exact selection.
+- Invoke the configured mapping in Normal mode to look up `<cword>`.
+- Invoke it in Visual mode to translate or look up the exact selection. A word
+  or short fixed expression gets a dictionary card; a complete clause, sentence,
+  dialogue, or paragraph gets the translation followed by useful language notes.
 - Invoke it again while the floating window is open to focus the result for
   copying.
 - Press `Esc` inside the result to close it.
@@ -110,7 +116,7 @@ require("nvim-translate").cancel()
 require("nvim-translate").clear_cache()
 ```
 
-Only the selected source text and the translation prompt are sent to the
+Only the selected source text and the configured analysis prompt are sent to the
 configured provider. The cache exists only for the current Neovim process.
 
 ## Tests

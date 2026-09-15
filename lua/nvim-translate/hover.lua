@@ -98,7 +98,7 @@ function M.show(lines, opts)
       focusable = true,
       max_width = window_size(cfg.max_width, vim.o.columns),
       max_height = window_size(cfg.max_height, vim.o.lines),
-      title = " Translation ",
+      title = " Translation / Dictionary ",
       title_pos = "center",
       wrap = true,
     })
@@ -114,7 +114,7 @@ function M.show(lines, opts)
 
   vim.keymap.set("n", "<Esc>", function()
     close(true)
-  end, { buffer = buf, desc = "Close translation", silent = true })
+  end, { buffer = buf, desc = "Close translation or dictionary", silent = true })
 
   vim.api.nvim_create_autocmd("WinClosed", {
     group = state.augroup,

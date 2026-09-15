@@ -14,12 +14,14 @@ local function equal(expected, actual)
   assert(vim.deep_equal(expected, actual), ("expected %s, got %s"):format(vim.inspect(expected), vim.inspect(actual)))
 end
 
-test("DeepSeek defaults are internally consistent", function()
+test("Qwen defaults are internally consistent", function()
   local config = require("nvim-translate.config")
   local opts = config.setup()
-  equal("https://api.deepseek.com", config.resolve_base_url())
-  equal("deepseek-flash", opts.model)
-  equal({ thinking = { type = "disabled" } }, opts.extra_body)
+  equal("https://dashscope.aliyuncs.com/compatible-mode/v1", config.resolve_base_url())
+  equal("qwen3.7-flash", opts.model)
+  equal({ enable_thinking = false }, opts.extra_body)
+  assert(opts.prompt:find("**词条**", 1, true))
+  assert(opts.prompt:find("**翻译**", 1, true))
   equal(false, opts.trigger_key)
 end)
 
@@ -47,12 +49,12 @@ test("request keeps the key and source text out of argv", function()
   local secret = "secret-token"
   local args, system_opts, body = llm.build({
     api_key = secret,
-    base_url = "https://api.deepseek.com/",
-    model = "deepseek-flash",
+    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1/",
+    model = "qwen3.7-flash",
     messages = { { role = "user", content = source } },
     temperature = 0.2,
     max_tokens = 100,
-    extra_body = { model = "must-not-win", stream = true, thinking = { type = "disabled" } },
+    extra_body = { model = "must-not-win", stream = true, enable_thinking = false },
     connect_timeout = 3,
     timeout = 5,
   })
@@ -61,10 +63,13 @@ test("request keeps the key and source text out of argv", function()
   assert(not argv:find(source, 1, true))
   assert(system_opts.stdin:find(source, 1, true))
   equal(secret, system_opts.env.NVIM_TRANSLATE_REQUEST_API_KEY)
-  equal("deepseek-flash", body.model)
+  equal("qwen3.7-flash", body.model)
   equal(false, body.stream)
-  equal("disabled", body.thinking.type)
-  equal("https://api.deepseek.com/chat/completions", args[#args])
+  equal(false, body.enable_thinking)
+  local encoded_body = vim.json.decode(system_opts.stdin)
+  equal(false, encoded_body.enable_thinking)
+  equal(nil, encoded_body.extra_body)
+  equal("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", args[#args])
 end)
 
 test("setup does not create a mapping unless requested", function()

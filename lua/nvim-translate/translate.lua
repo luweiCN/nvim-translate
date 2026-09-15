@@ -124,7 +124,7 @@ local function start_spinner(id)
         stop_spinner()
         return
       end
-      hover.update({ ("  %s  Translating..."):format(opts.spinner_frames[frame]) })
+      hover.update({ ("  %s  Analyzing..."):format(opts.spinner_frames[frame]) })
       frame = frame % #opts.spinner_frames + 1
     end)
   )
@@ -138,7 +138,7 @@ function M.translate()
 
   local text, anchor = input()
   if not text or not text:match("%S") then
-    vim.notify("[nvim-translate] Nothing to translate", vim.log.levels.WARN)
+    vim.notify("[nvim-translate] Nothing to translate or look up", vim.log.levels.WARN)
     return
   end
 
@@ -173,7 +173,7 @@ function M.translate()
     return
   end
 
-  hover.show({ "  |  Translating..." }, hover_opts)
+  hover.show({ "  |  Analyzing..." }, hover_opts)
   start_spinner(id)
 
   local current_process = llm.chat({
