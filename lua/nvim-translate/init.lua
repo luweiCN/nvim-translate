@@ -23,14 +23,14 @@ function M.setup(opts)
   if resolved.trigger_key then
     mapped_key = resolved.trigger_key
     vim.keymap.set({ "n", "x" }, mapped_key, M.translate, {
-      desc = "Translate text",
+      desc = "Translate or look up text",
       silent = true,
     })
   end
 
   pcall(vim.api.nvim_del_user_command, "Translate")
   vim.api.nvim_create_user_command("Translate", M.translate, {
-    desc = "Translate word under cursor",
+    desc = "Translate or look up the word under cursor",
   })
 end
 

@@ -20,8 +20,13 @@ test("Qwen defaults are internally consistent", function()
   equal("https://dashscope.aliyuncs.com/compatible-mode/v1", config.resolve_base_url())
   equal("qwen3.7-flash", opts.model)
   equal({ enable_thinking = false }, opts.extra_body)
-  assert(opts.prompt:find("**词条**", 1, true))
-  assert(opts.prompt:find("**翻译**", 1, true))
+  equal(true, opts.stream)
+  equal(80, opts.stream_update_interval)
+  equal(" 翻译／词典 ", opts.title)
+  assert(opts.prompt:find("## 发音与词形", 1, true))
+  assert(opts.prompt:find("## 译文", 1, true))
+  assert(opts.prompt:find("**原形**", 1, true))
+  assert(opts.prompt:find("grammatically", 1, true))
   equal(false, opts.trigger_key)
 end)
 
@@ -54,6 +59,7 @@ test("request keeps the key and source text out of argv", function()
     messages = { { role = "user", content = source } },
     temperature = 0.2,
     max_tokens = 100,
+    stream = true,
     extra_body = { model = "must-not-win", stream = true, enable_thinking = false },
     connect_timeout = 3,
     timeout = 5,
@@ -64,12 +70,66 @@ test("request keeps the key and source text out of argv", function()
   assert(system_opts.stdin:find(source, 1, true))
   equal(secret, system_opts.env.NVIM_TRANSLATE_REQUEST_API_KEY)
   equal("qwen3.7-flash", body.model)
-  equal(false, body.stream)
+  equal(true, body.stream)
   equal(false, body.enable_thinking)
   local encoded_body = vim.json.decode(system_opts.stdin)
   equal(false, encoded_body.enable_thinking)
   equal(nil, encoded_body.extra_body)
+  assert(vim.tbl_contains(args, "--no-buffer"))
+  assert(vim.tbl_contains(args, "Accept: text/event-stream"))
   equal("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", args[#args])
+end)
+
+test("streaming request parses SSE split across arbitrary chunks", function()
+  local original_system = vim.system
+  local captured_opts
+  local deltas = {}
+  local completed
+  local completion_error
+
+  local ok, err = xpcall(function()
+    vim.system = function(_, system_opts, on_exit)
+      captured_opts = system_opts
+      if type(system_opts.stdout) == "function" then
+        system_opts.stdout(nil, 'data: {"choices":[{"delta":{"cont')
+        system_opts.stdout(nil, 'ent":"你"}}]}\n\ndata: {"choices":[{"delta":{"content":"好"}}]}\n\n')
+        system_opts.stdout(nil, "data: [DONE]\n\n")
+        system_opts.stdout(nil, nil)
+        on_exit({ code = 0, signal = 0, stderr = "" })
+      end
+      return {
+        is_closing = function()
+          return false
+        end,
+      }
+    end
+
+    require("nvim-translate.llm").chat({
+      api_key = "secret-token",
+      base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model = "qwen3.7-flash",
+      messages = { { role = "user", content = "hello" } },
+      temperature = 0.2,
+      max_tokens = 100,
+      stream = true,
+      extra_body = { enable_thinking = false },
+      connect_timeout = 3,
+      timeout = 5,
+    }, function(result, request_error)
+      completed = result
+      completion_error = request_error
+    end, function(delta)
+      deltas[#deltas + 1] = delta
+    end)
+
+    equal("function", type(captured_opts and captured_opts.stdout))
+    equal({ "你", "好" }, deltas)
+    equal("你好", completed)
+    equal(nil, completion_error)
+  end, debug.traceback)
+
+  vim.system = original_system
+  assert(ok, err)
 end)
 
 test("setup does not create a mapping unless requested", function()
@@ -98,13 +158,92 @@ test("hover can be updated, focused, and closed once", function()
   })
 
   assert(vim.api.nvim_win_is_valid(win))
-  hover.update({ "你好，世界" })
-  equal("你好，世界", vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1])
+  equal("markdown", vim.bo[buf].filetype)
+  local initial_width = vim.api.nvim_win_get_width(win)
+  local updated_line = "你好，世界：" .. string.rep("x", 30)
+  hover.update({ updated_line })
+  equal(updated_line, vim.api.nvim_buf_get_lines(buf, 0, -1, false)[1])
+  assert(vim.api.nvim_win_get_width(win) > initial_width)
   hover.focus()
   equal(win, vim.api.nvim_get_current_win())
   hover.close()
   equal(false, hover.is_open())
   equal(1, closes)
+end)
+
+test("streamed content appears with the source before completion", function()
+  local callbacks = {}
+  local chunk_callbacks = {}
+  local displays = {}
+  local open = false
+  local on_close
+
+  package.loaded["nvim-translate.llm"] = {
+    chat = function(_, callback, on_chunk)
+      callbacks[#callbacks + 1] = callback
+      chunk_callbacks[#chunk_callbacks + 1] = on_chunk
+      return {
+        is_closing = function()
+          return false
+        end,
+        kill = function() end,
+      }
+    end,
+  }
+  package.loaded["nvim-translate.hover"] = {
+    is_open = function()
+      return open
+    end,
+    focus = function() end,
+    show = function(value, opts)
+      open = true
+      on_close = opts.on_close
+      displays[#displays + 1] = table.concat(value, "\n")
+    end,
+    update = function(value)
+      displays[#displays + 1] = table.concat(value, "\n")
+    end,
+    close = function(notify)
+      open = false
+      if notify ~= false and on_close then
+        on_close()
+      end
+    end,
+  }
+  package.loaded["nvim-translate.translate"] = nil
+
+  local config = require("nvim-translate.config")
+  local cache = require("nvim-translate.cache")
+  config.setup({ api_key = "test", spinner_interval = 100000, stream_update_interval = 1 })
+  cache.setup(10)
+  local translate = require("nvim-translate.translate")
+
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "alpha" })
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  translate.translate()
+  assert(displays[1]:find("[!ABSTRACT] 词条", 1, true))
+  assert(displays[1]:find("alpha", 1, true))
+  equal("function", type(chunk_callbacks[1]))
+
+  chunk_callbacks[1]("## 发音与词形")
+  assert(vim.wait(100, function()
+    return displays[#displays]:find("## 发音与词形", 1, true) ~= nil
+  end))
+  assert(displays[#displays]:find("alpha", 1, true))
+
+  callbacks[1]("## 发音与词形\n完整结果", nil)
+  assert(vim.wait(100, function()
+    return displays[#displays]:find("完整结果", 1, true) ~= nil
+  end))
+  translate.cancel()
+
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "hello world" })
+  vim.cmd("normal! gg0v$")
+  translate.translate()
+  assert(displays[#displays]:find("[!QUOTE] 原文", 1, true))
+  assert(displays[#displays]:find("hello world", 1, true))
+  translate.cancel()
+  vim.cmd("normal! \27")
 end)
 
 test("a cached result invalidates an older pending response", function()
@@ -137,7 +276,9 @@ test("a cached result invalidates an older pending response", function()
       on_close = opts.on_close
       displays[#displays + 1] = table.concat(value, "\n")
     end,
-    update = function() end,
+    update = function(value)
+      displays[#displays + 1] = table.concat(value, "\n")
+    end,
     close = function(notify)
       open = false
       if notify ~= false and on_close then
@@ -157,8 +298,9 @@ test("a cached result invalidates an older pending response", function()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   translate.translate()
   callbacks[1]("B", nil)
+  local beta_display = "> [!ABSTRACT] 词条\n> **beta**\n\nB"
   vim.wait(100, function()
-    return displays[#displays] == "B"
+    return displays[#displays] == beta_display
   end)
 
   package.loaded["nvim-translate.hover"].close(true)
@@ -170,10 +312,10 @@ test("a cached result invalidates an older pending response", function()
 
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   translate.translate()
-  equal("B", displays[#displays])
+  equal(beta_display, displays[#displays])
   alpha_callback("A", nil)
   vim.wait(20)
-  equal("B", displays[#displays])
+  equal(beta_display, displays[#displays])
   translate.cancel()
 end)
 

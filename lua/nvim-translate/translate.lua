@@ -84,11 +84,11 @@ local function input()
     local first = vim.fn.getpos("v")
     local last = vim.fn.getpos(".")
     local lines = vim.fn.getregion(first, last, { type = mode })
-    return table.concat(lines, "\n"), visual_anchor(first, last, mode)
+    return table.concat(lines, "\n"), visual_anchor(first, last, mode), false
   end
 
   local word = vim.fn.expand("<cword>")
-  return word, word ~= "" and word_anchor(word) or nil
+  return word, word ~= "" and word_anchor(word) or nil, true
 end
 
 local function cache_key(opts, base_url, text)
@@ -112,7 +112,19 @@ local function lines(value)
   return vim.split(value, "\n", { plain = true })
 end
 
-local function start_spinner(id)
+local function source_block(text, is_word)
+  local result = { is_word and "> [!ABSTRACT] 词条" or "> [!QUOTE] 原文" }
+  for _, line in ipairs(lines(text)) do
+    result[#result + 1] = "> " .. (is_word and "**" .. line .. "**" or line)
+  end
+  return table.concat(result, "\n")
+end
+
+local function display_lines(source, content)
+  return lines(source .. "\n\n" .. content)
+end
+
+local function start_spinner(id, source)
   local opts = config.get()
   local frame = 1
   spinner = vim.uv.new_timer()
@@ -124,7 +136,7 @@ local function start_spinner(id)
         stop_spinner()
         return
       end
-      hover.update({ ("  %s  Analyzing..."):format(opts.spinner_frames[frame]) })
+      hover.update(display_lines(source, ("_%s 分析中…_"):format(opts.spinner_frames[frame])))
       frame = frame % #opts.spinner_frames + 1
     end)
   )
@@ -136,7 +148,7 @@ function M.translate()
     return
   end
 
-  local text, anchor = input()
+  local text, anchor, is_word = input()
   if not text or not text:match("%S") then
     vim.notify("[nvim-translate] Nothing to translate or look up", vim.log.levels.WARN)
     return
@@ -148,6 +160,7 @@ function M.translate()
   local source_buf = vim.api.nvim_get_current_buf()
   local base_url = config.resolve_base_url()
   local key = cache_key(opts, base_url, text)
+  local source = source_block(text, is_word)
   local hover_opts = {
     source_win = source_win,
     source_buf = source_buf,
@@ -162,19 +175,40 @@ function M.translate()
   if opts.cache_enabled then
     local cached = cache.get(key)
     if cached then
-      hover.show(lines(cached), hover_opts)
+      hover.show(display_lines(source, cached), hover_opts)
       return
     end
   end
 
   local api_key, key_error = config.resolve_api_key()
   if not api_key then
-    hover.show(lines("[Error] " .. key_error), hover_opts)
+    hover.show(display_lines(source, "[Error] " .. key_error), hover_opts)
     return
   end
 
-  hover.show({ "  |  Analyzing..." }, hover_opts)
-  start_spinner(id)
+  hover.show(display_lines(source, "_| 分析中…_"), hover_opts)
+  start_spinner(id, source)
+
+  local streamed = ""
+  local stream_render_pending = false
+  local stream_rendered = false
+
+  local function on_chunk(chunk)
+    streamed = streamed .. chunk
+    if stream_render_pending then
+      return
+    end
+    stream_render_pending = true
+    vim.defer_fn(function()
+      stream_render_pending = false
+      if id ~= generation or not hover.is_open() then
+        return
+      end
+      stream_rendered = true
+      stop_spinner()
+      hover.update(display_lines(source, streamed))
+    end, stream_rendered and opts.stream_update_interval or 0)
+  end
 
   local current_process = llm.chat({
     api_key = api_key,
@@ -186,6 +220,7 @@ function M.translate()
     },
     temperature = opts.temperature,
     max_tokens = opts.max_tokens,
+    stream = opts.stream,
     extra_body = opts.extra_body,
     connect_timeout = opts.connect_timeout,
     timeout = opts.timeout,
@@ -200,15 +235,15 @@ function M.translate()
         return
       end
       if request_error then
-        hover.show(lines("[Error] " .. request_error), hover_opts)
+        hover.update(display_lines(source, "[Error] " .. request_error))
         return
       end
       if opts.cache_enabled then
         cache.set(key, result)
       end
-      hover.show(lines(result), hover_opts)
+      hover.update(display_lines(source, result))
     end)
-  end)
+  end, on_chunk)
 
   if id == generation then
     process = current_process

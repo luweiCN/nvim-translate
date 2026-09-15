@@ -8,8 +8,11 @@ Cloud Model Studio's OpenAI-compatible API with Qwen3.7-Flash.
 - Look up the word under the cursor as a learner's dictionary entry.
 - Translate a Visual selection and explain only its useful sentence patterns
   and vocabulary.
-- Show the result in a focusable Markdown floating window.
-- Run requests asynchronously, with cancellation and stale-response protection.
+- Repeat the exact word or source passage in a styled Markdown callout.
+- Stream the result into a focusable Markdown floating window, with throttled
+  redraws, cancellation, and stale-response protection.
+- Integrate automatically with render-markdown.nvim when it is configured for
+  the `markdown` filetype.
 - Cache repeated translations in memory with an LRU cache.
 - Keep the API key and source text out of `curl` command-line arguments.
 - Configure the endpoint, model, prompt, provider-specific request fields, timeouts,
@@ -66,6 +69,7 @@ plugin itself should own the mapping.
 
   temperature = 0.2,
   max_tokens = 2048,
+  stream = true,
   extra_body = {
     enable_thinking = false,
   },
@@ -77,11 +81,13 @@ plugin itself should own the mapping.
   connect_timeout = 10,
   timeout = 45,
 
+  title = " 翻译／词典 ",
   border = "rounded",
   max_width = 0.7,                     -- ratio or absolute columns
   max_height = 0.6,                    -- ratio or absolute lines
   spinner_frames = { "|", "/", "-", "\\" },
   spinner_interval = 120,
+  stream_update_interval = 80,
 }
 ```
 
@@ -105,6 +111,9 @@ opts = {
 - Invoke it in Visual mode to translate or look up the exact selection. A word
   or short fixed expression gets a dictionary card; a complete clause, sentence,
   dialogue, or paragraph gets the translation followed by useful language notes.
+- The exact source remains at the top of the floating window while streamed
+  Markdown arrives below it. Dictionary entries group morphology and IPA by
+  grammatical reading; passages use separate translation and explanation sections.
 - Invoke it again while the floating window is open to focus the result for
   copying.
 - Press `Esc` inside the result to close it.
