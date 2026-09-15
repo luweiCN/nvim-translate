@@ -129,6 +129,7 @@ end
 
 function M.translate()
   if hover.is_open() then
+    hover.close(true)
     return
   end
 

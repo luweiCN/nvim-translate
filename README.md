@@ -129,6 +129,8 @@ opts = {
   when the result closes, revealing any prior mapping or native behavior.
 - Integrations can call `focus()` from an existing documentation key such as `K`
   to enter the result for selecting or copying.
+- Invoke the configured translation mapping again from either window to close
+  the current result and cancel an unfinished request.
 - Press `Esc` inside the result to close it. Leaving a focused result window also
   closes it instead of leaving an unreachable floating window behind.
 - Run `:Translate` to translate the word under the cursor.

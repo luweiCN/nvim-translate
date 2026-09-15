@@ -281,8 +281,6 @@ test("streamed content appears with the source before completion", function()
   assert(displays[1]:find("# alpha", 1, true))
   equal({ mode = "dictionary", text = "alpha" }, vim.json.decode(requests[1].messages[2].content))
   equal("function", type(chunk_callbacks[1]))
-  translate.translate()
-  equal(1, #callbacks)
 
   local initial_updates = #displays
   vim.wait(250)
@@ -308,7 +306,9 @@ test("streamed content appears with the source before completion", function()
   assert(vim.wait(100, function()
     return displays[#displays]:find("完整结果", 1, true) ~= nil
   end))
-  translate.cancel()
+  translate.translate()
+  equal(false, open)
+  equal(1, #callbacks)
 
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { "hello world" })
   vim.cmd("normal! gg0v$")
@@ -382,7 +382,9 @@ test("a cached result invalidates an older pending response", function()
   vim.api.nvim_win_set_cursor(0, { 1, 5 })
   translate.translate()
   local alpha_callback = callbacks[2]
-  package.loaded["nvim-translate.hover"].close(true)
+  translate.translate()
+  equal(false, open)
+  equal(2, #callbacks)
   equal(1, kills)
 
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
