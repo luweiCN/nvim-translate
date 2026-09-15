@@ -65,7 +65,7 @@ local function visual_anchor(first, last, mode)
   }
 end
 
-local function input()
+local function context_input()
   local mode = vim.fn.mode()
   if mode:match("^[vV\22]") then
     local first = vim.fn.getpos("v")
@@ -88,7 +88,7 @@ local function cache_key(opts, base_url, mode, text)
     opts.prompt,
     tostring(opts.temperature),
     tostring(opts.max_tokens),
-    vim.json.encode(opts.extra_body),
+    vim.inspect(opts.extra_body),
     mode,
     text,
   }
@@ -127,29 +127,10 @@ local function complete_lines(value)
   return nil
 end
 
-function M.translate()
-  if hover.is_open() then
-    hover.close(true)
-    return
-  end
-
-  local text, anchor, is_word = input()
-  if not text or not text:match("%S") then
-    vim.notify("[nvim-translate] Nothing to translate or look up", vim.log.levels.WARN)
-    return
-  end
-
-  local id = invalidate()
-  local opts = config.get()
-  local source_win = vim.api.nvim_get_current_win()
-  local source_buf = vim.api.nvim_get_current_buf()
-  local base_url = config.resolve_base_url()
-  local request_mode = is_word and "dictionary" or "auto"
-  local key = cache_key(opts, base_url, request_mode, text)
-  local source = source_block(text, is_word)
-  local hover_opts = {
-    source_win = source_win,
-    source_buf = source_buf,
+local function hover_options(id, anchor)
+  return {
+    source_win = vim.api.nvim_get_current_win(),
+    source_buf = vim.api.nvim_get_current_buf(),
     anchor = anchor,
     on_close = function()
       if id == generation then
@@ -157,6 +138,36 @@ function M.translate()
       end
     end,
   }
+end
+
+function M.translate(text)
+  if hover.is_open() then
+    hover.close(true)
+    if text == nil then
+      return
+    end
+  end
+
+  local anchor, is_word
+  if text == nil then
+    text, anchor, is_word = context_input()
+  else
+    assert(type(text) == "string", "[nvim-translate] text must be a string")
+    text = vim.trim(text)
+    is_word = false
+  end
+  if not text or not text:match("%S") then
+    vim.notify("[nvim-translate] Nothing to translate or look up", vim.log.levels.WARN)
+    return
+  end
+
+  local id = invalidate()
+  local opts = config.get()
+  local base_url = config.resolve_base_url()
+  local request_mode = is_word and "dictionary" or "auto"
+  local key = cache_key(opts, base_url, request_mode, text)
+  local source = source_block(text, is_word)
+  local hover_opts = hover_options(id, anchor)
 
   if opts.cache_enabled then
     local cached = cache.get(key)
@@ -227,7 +238,14 @@ function M.translate()
         return
       end
       if opts.cache_enabled then
-        cache.set(key, result)
+        local stored, cache_error = cache.set(key, result, {
+          text = text,
+          mode = request_mode,
+          is_word = is_word,
+        })
+        if not stored and cache_error then
+          vim.notify("[nvim-translate] " .. cache_error, vim.log.levels.WARN)
+        end
       end
       hover.update(display_lines(source, result))
     end)
@@ -238,6 +256,26 @@ function M.translate()
   elseif current_process and not current_process:is_closing() then
     pcall(current_process.kill, current_process, "sigterm")
   end
+end
+
+function M.history()
+  local history = cache.history()
+  for _, entry in ipairs(history) do
+    entry.markdown = table.concat(display_lines(source_block(entry.text, entry.is_word), entry.value), "\n")
+  end
+  return history
+end
+
+function M.open_history(key)
+  local entry = cache.get_entry(key)
+  if not entry then
+    vim.notify("[nvim-translate] Cached result no longer exists", vim.log.levels.WARN)
+    return false
+  end
+  hover.close(true)
+  local id = invalidate()
+  hover.show(display_lines(source_block(entry.text, entry.is_word), entry.value), hover_options(id))
+  return hover.is_open()
 end
 
 function M.cancel()
