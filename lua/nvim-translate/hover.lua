@@ -233,6 +233,13 @@ function M.show(lines, opts)
       end
     end,
   })
+  vim.api.nvim_create_autocmd("WinLeave", {
+    group = state.augroup,
+    buffer = buf,
+    callback = function()
+      close(true)
+    end,
+  })
 
   return buf, win
 end

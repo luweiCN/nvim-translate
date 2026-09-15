@@ -117,6 +117,8 @@ opts = {
 - Invoke it in Visual mode to translate or look up the exact selection. A word
   or short fixed expression gets a dictionary card; a complete clause, sentence,
   dialogue, or paragraph gets the translation followed by useful language notes.
+  After the selection is captured, the editor returns to Normal mode so result
+  scrolling and focus keys work immediately.
 - The exact source remains at the top of the floating window while streamed
   Markdown arrives below it. A word is rendered as the level-one headword;
   dictionary entries group lemma and inflection metadata, pronunciation, grammar,
@@ -127,7 +129,8 @@ opts = {
   when the result closes, revealing any prior mapping or native behavior.
 - Integrations can call `focus()` from an existing documentation key such as `K`
   to enter the result for selecting or copying.
-- Press `Esc` inside the result to close it.
+- Press `Esc` inside the result to close it. Leaving a focused result window also
+  closes it instead of leaving an unreachable floating window behind.
 - Run `:Translate` to translate the word under the cursor.
 
 ```lua

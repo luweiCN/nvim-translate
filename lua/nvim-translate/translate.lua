@@ -71,7 +71,10 @@ local function input()
     local first = vim.fn.getpos("v")
     local last = vim.fn.getpos(".")
     local lines = vim.fn.getregion(first, last, { type = mode })
-    return table.concat(lines, "\n"), visual_anchor(first, last, mode), false
+    local anchor = visual_anchor(first, last, mode)
+    local escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+    vim.cmd.normal({ args = { escape }, bang = true })
+    return table.concat(lines, "\n"), anchor, false
   end
 
   local word = vim.fn.expand("<cword>")
